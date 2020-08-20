@@ -1,4 +1,5 @@
 #include "my402list.h"
+#include<stdlib.h>
 
 int  My402ListLength(My402List* list) {
     return list->num_members;
@@ -20,10 +21,10 @@ int  My402ListAppend(My402List* list, void* obj) {
     newNode->obj = obj;
     newNode->next = &(list->anchor);
     newNode->prev = list->anchor.prev;
-    // diff
     list->anchor.prev->next = newNode;
     list->anchor.prev = newNode;
     list->num_members = list->num_members + 1;
+    return TRUE;
 }
 
 int  My402ListPrepend(My402List* list, void* obj) {
@@ -34,10 +35,10 @@ int  My402ListPrepend(My402List* list, void* obj) {
     newNode->obj = obj;
     newNode->next = list->anchor.next;
     newNode->prev = &(list->anchor);
-    // diff
     list->anchor.next->prev = newNode;
     list->anchor.next = newNode;
     list->num_members = list->num_members + 1;
+    return TRUE;
 }
 
 void My402ListUnlink(My402List* list, My402ListElem* node) {
@@ -45,9 +46,6 @@ void My402ListUnlink(My402List* list, My402ListElem* node) {
     My402ListElem* nextNode = node->next;
     prevNode->next = nextNode;
     nextNode->prev = prevNode;
-    // node->next = NULL;
-    // node->prev = NULL;
-    // node->obj = NULL;
     list->num_members = list->num_members - 1;
     free(node);
 }
@@ -62,6 +60,9 @@ void My402ListUnlinkAll(My402List* list) {
 }
 
 int My402ListInsertAfter(My402List* list, void* obj, My402ListElem* node) {
+    if (node == NULL) {
+        return My402ListAppend(list, obj);
+    }
     My402ListElem* newNode = (My402ListElem*)malloc(sizeof(My402ListElem));
     if (newNode == NULL) {
         return FALSE;
@@ -72,10 +73,14 @@ int My402ListInsertAfter(My402List* list, void* obj, My402ListElem* node) {
     newNode->next = nextNode;
     node->next = newNode;
     nextNode->prev = newNode;
+    (list->num_members)++;
     return TRUE;
 }
 
 int My402ListInsertBefore(My402List* list, void* obj, My402ListElem* node) {
+    if (list == NULL) {
+        return My402ListPrepend(list, obj);
+    }
     My402ListElem* newNode = (My402ListElem*)malloc(sizeof(My402ListElem));
     if (newNode == NULL) {
         return FALSE;
@@ -86,6 +91,8 @@ int My402ListInsertBefore(My402List* list, void* obj, My402ListElem* node) {
     newNode->obj = obj;
     prevNode->next = newNode;
     node->prev = newNode;
+    (list->num_members)++;
+    return TRUE;
 }
 
 My402ListElem *My402ListFirst(My402List* list) {
@@ -110,7 +117,7 @@ My402ListElem *My402ListNext(My402List* list, My402ListElem* cur) {
 }
 
 My402ListElem *My402ListPrev(My402List* list, My402ListElem* cur) {
-    if (cur->next == &(list->anchor)) {
+    if (cur->prev == &(list->anchor)) {
         return NULL;
     }
     return cur->prev;
