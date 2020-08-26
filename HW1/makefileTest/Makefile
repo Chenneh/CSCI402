@@ -1,8 +1,5 @@
-#
-# This is the Makefile that can be used to create the "listtest" executable
-# To create "listtest" executable, do:
-#	make listtest
-#
+# command line for making : make
+# command line for running: ./warmup1 sort test.tfile
 listtest: listtest.o my402list.o
 	gcc -o listtest -g listtest.o my402list.o
 
