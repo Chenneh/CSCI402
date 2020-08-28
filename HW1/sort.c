@@ -15,7 +15,7 @@ int readFile(FILE *file, My402List* list) {
         processAmount(fields, curTrans);
         processDesc(fields, curTrans);
         My402ListAppend(list, (void*) curTrans);
-        //printTrans(curTrans);
+        // printTrans(curTrans);
     }
     return TRUE;
 }
@@ -195,6 +195,9 @@ void printList(My402List* list) {
         while (amountStr[index] == '0' || amountStr[index] == ',') {
             amountStr[index++] = ' ';
         }
+        if (amountStr[index] == '.') {
+            amountStr[index - 1] = '0';
+        }
         fprintf(stdout, " %s |", amountStr);  
 
         // Make Balance
@@ -256,6 +259,9 @@ void printList(My402List* list) {
         while (balanceStr[index] == '0' || balanceStr[index] == ',') {
             balanceStr[index++] = ' ';
         }
+        if (balanceStr[index] == '.') {
+            balanceStr[index - 1] = '0';
+        }
         balance = balanceCopy;
         fprintf(stdout, " %s |\n", balanceStr); 
     }
@@ -296,20 +302,20 @@ int test(FILE* file, My402List* list) {
 
 // Main Function
 int main(int argc, char** argv) {
+    FILE* file = NULL;
     if (argc < 2 || argc > 3) {
         fprintf(stderr, "Bad argument number.\n");
         exit(0);
     }
     if (argc == 2) {
-        if (strcmp(argv[2], "sort") {
+        if (strcmp(argv[1], "sort")) {
             fprintf(stderr, "Can only use sort as second argument.\n");
             exit(0);
         }
         file = stdin;
     } else {
-        char *fileName = argv[2];
+        file = fopen(argv[2], "r");
     }
-    FILE *file = fopen(fileName, "r");
     My402List list;
     My402ListInit(&list);
     readFile(file, &list);
