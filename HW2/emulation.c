@@ -21,6 +21,7 @@ double prevPacketTime;
 double prevTokenTime;
 
 int packetRemaining;
+int tokenRemaining;
 
 // double curExpectedArrivalTime;
 struct timeval START_TIME;
@@ -66,7 +67,7 @@ void doOnePacket(int id, int tokenNums, int interArrivalTime, int serviceTime) {
                 getRelativeTimeInMs(&(packetMoved->Q1OutTime));
                 fprintf(stdout, "%012.3fms: p%d leaves Q1, time in Q1 = %.3fms, token bucket now has %d token(s)\n", 
                         packetMoved->Q1OutTime, packetMoved->id, packetMoved->Q1OutTime - packetMoved->Q1InTime, tokenBucket);
-                My402ListAppend(&Q2, packetMovedElem);
+                My402ListAppend(&Q2, packetMoved);
                 getRelativeTimeInMs(&(packetMoved->Q2InTime));
                 fprintf(stdout, "%012.3fms: p%d enters Q2\n", packetMoved->Q2InTime, packetMoved->id);
                 pthread_cond_broadcast(&cv);
@@ -82,35 +83,6 @@ void doOnePacket(int id, int tokenNums, int interArrivalTime, int serviceTime) {
 
 void *packetArrival(void* arg) {
     for (int i = 0; i < num; i++) {
-        // Packet *newPacket = (Packet*)malloc(sizeof(Packet));
-        // // default
-        // newPacket->id = currentPacketId++;
-        // newPacket->tokenNums = P;
-        // newPacket->interArrivalTime = Default_Inter_Arrival_Time;
-        // newPacket->serviceTime = Default_Service_Time;
-        // getRelativeTimeInMs(&(newPacket->arrivalTime));
-        // // enqueue & dequeue operations
-        // pthread_mutex_lock(&m);
-        // if (newPacket->tokenNums <= B) {
-        //     My402ListAppend(Q1, newPacket);
-        //     getRelativeTimeInMs(&(newPacket->Q1InTime));
-        //     if (My402ListLength(&Q1) == 1) {
-        //         My402ListElem* packetMovedElem = My402ListFirst(&Q1);
-        //         Packet* packetMoved = packetMovedElem->obj;
-        //         if (tokenBucket >= packetMoved->tokenNums) {
-        //             tokenBucket -= packetMoved->tokenNums;
-        //             My402ListUnlink(&Q1, packetMovedElem);
-        //             getRelativeTimeInMs(&(packetMoved->Q1OutTime));
-        //             My402ListAppend(&Q2, packetMovedElem);
-        //             getRelativeTimeInMs(&(packetMoved->Q2InTime));
-        //             pthread_cond_broadcast(&cv);
-        //         }
-        //     } 
-        // } else {
-        //     // print
-        // }
-        // prevPacketTime = newPacket->arrivalTime;
-        // pthread_mutex_unlock(&m);
         doOnePacket(currentPacketId++, P, Default_Inter_Arrival_Time, Default_Service_Time);
     }
     packetRemaining = FALSE;
@@ -144,10 +116,11 @@ void doOneToken(int tokenArrivalTime) {
             getRelativeTimeInMs(&(packetMoved->Q1OutTime));
             fprintf(stdout, "%012.3fms: p%d leaves Q1, time in Q1 = %.3fms, token bucket now has %d token(s)\n", 
                         packetMoved->Q1OutTime, packetMoved->id, packetMoved->Q1OutTime - packetMoved->Q1InTime, tokenBucket);
-            My402ListAppend(&Q2, packetMovedElem);
+            My402ListAppend(&Q2, packetMoved);
             getRelativeTimeInMs(&(packetMoved->Q2InTime));
             fprintf(stdout, "%012.3fms: p%d enters Q2\n", packetMoved->Q2InTime, packetMoved->id);
             pthread_cond_broadcast(&cv);
+            // *(Packet*) (My402ListFirst(&Q2)->obj)
         }
     }
     currentTokenId++;
@@ -159,46 +132,45 @@ void *tokenDeposit(void *arg) {
     while (!My402ListLength(&Q1) == 0 || packetRemaining) {
         doOneToken(Default_Token_Arrival_Time);
     }
-    // double curArrivalTime;
-    // getRelativeTimeInMs(&curArrivalTime);
-    // double curExpectedArrivalTime = prevTokenTime + Default_Token_Arrival_Time;
-    // if (curArrivalTime < curExpectedArrivalTime) {
-    //     usleep(curExpectedArrivalTime - curArrivalTime);
-    // }
-    // pthread_mutex_lock(&m);
-    // tokenBucket++;
-    // char plural = ' ';
-    // if (tokenBucket > 1) {
-    //     plural = 's';
-    // }
-    // fprintf(stdout, "%012.3fms: t%d arrives, token bucket now has %d token%c\n",
-    //             curArrivalTime, currentTokenId, tokenBucket, plural);
-    // if (My402ListLength(&Q1) > 0) {
-    //     My402ListElem* packetMovedElem = My402ListFirst(&Q1);
-    //     Packet* packetMoved = packetMovedElem->obj;
-    //     if (tokenBucket >= packetMoved->tokenNums) {
-    //         tokenBucket -= packetMoved->tokenNums; // why must be zero?
-
-    //         My402ListUnlink(&Q1, packetMovedElem);
-    //         getRelativeTimeInMs(&(packetMoved->Q1OutTime));
-
-    //         My402ListAppend(&Q2, packetMovedElem);
-    //         getRelativeTimeInMs(&(packetMoved->Q2InTime));
-
-    //         pthread_cond_broadcast(&cv);
-    //     }
-    // }
-    // currentTokenId++;
-    // prevTokenTime = curArrivalTime;
-    // pthread_mutex_unlock(&m);
+    tokenRemaining = FALSE;
+    //eixt
 
     return (0);
 }
 
-void *serverOperation(void *arg) {
+void serveOne(int serverNum) {
     pthread_mutex_lock(&m);
-
+    while (My402ListLength(&Q2) == 0) {
+        if (!tokenRemaining) {
+            pthread_mutex_unlock(&m);
+            // eixt
+            return; 
+        }
+        pthread_cond_wait(&cv, &m);
+    }
+    My402ListElem* packetMovedElem = My402ListFirst(&Q2);
+    Packet* packetMoved = (Packet* )packetMovedElem->obj;
+    getRelativeTimeInMs(&packetMoved->Q2OutTime);
+    My402ListUnlink(&Q2, packetMovedElem);
+    fprintf(stdout, "%012.3fms: p%d leaves Q2, time in Q2 = %.3fms\n", 
+            packetMoved->Q2OutTime, packetMoved->id, packetMoved->Q2OutTime - packetMoved->Q2InTime);
     pthread_mutex_unlock(&m);
+    double startServiceTime;
+    getRelativeTimeInMs(&startServiceTime);
+    fprintf(stdout, "%012.3fms: p%d begin service at S%d, requesting %dms of service\n", 
+            startServiceTime, packetMoved->id, serverNum, packetMoved->serviceTime); // service time use integer
+    usleep(packetMoved->serviceTime * 1000);
+    double endServiceTime;
+    getRelativeTimeInMs(&endServiceTime);
+    fprintf(stdout, "%012.3fms: p%d departs from S%d, servie time = %.3fms, time in system = %.3fms\n", 
+            endServiceTime, packetMoved->id, serverNum, endServiceTime - startServiceTime, endServiceTime - packetMoved->arrivalTime); 
+}   
+
+void *serverOperation(void *arg) {
+    while (My402ListLength(&Q2) > 0 || My402ListLength(&Q1) > 0 || tokenRemaining) {
+        serveOne((int) arg);
+    }
+    // exit;
     return (0);
 }
 
@@ -217,7 +189,7 @@ int main(int argc, char *argv[]) {
     r = 4;
     B = 10;
     P = 3;
-    num = 2; // default = 20;
+    num = 1; // default = 20;
     Default_Inter_Arrival_Time = min(1000.0 / lambda, MAX_RATE);
     Default_Service_Time = min(1000.0 / mu, MAX_RATE);
     Default_Token_Arrival_Time = min(1000.0 / r, MAX_RATE);
@@ -230,6 +202,7 @@ int main(int argc, char *argv[]) {
     prevPacketTime = 0;
     prevTokenTime = 0;
     packetRemaining = TRUE;
+    tokenRemaining = TRUE;
     gettimeofday(&START_TIME, NULL);
 
 
@@ -239,8 +212,8 @@ int main(int argc, char *argv[]) {
     fprintf(stdout, "%012.3fms: emulation begins\n", 0.0);
     pthread_create(&packetThread, 0, packetArrival, NULL);
     pthread_create(&tokenThread, 0, tokenDeposit, NULL);
-    pthread_create(&serverThread1, 0, serverOperation, NULL);
-    pthread_create(&serverThread2, 0, serverOperation, NULL);
+    pthread_create(&serverThread1, 0, serverOperation, (void*) 1);
+    pthread_create(&serverThread2, 0, serverOperation, (void*) 2);
 
     pthread_join(packetThread, NULL);
     pthread_join(tokenThread, NULL);
