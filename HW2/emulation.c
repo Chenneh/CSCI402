@@ -14,6 +14,10 @@ int Default_Service_Time;
 int MAX_B_P_NUM = 2147483647;
 int MAX_RATE = 10000; // 10s = 10000ms
 
+// if deterministic
+int DETERMINISTIC;
+char* FILENAME;
+FILE* FILEDESCRIPTOR;
 
 int currentPacketId;
 int currentTokenId;
@@ -83,7 +87,22 @@ void doOnePacket(int id, int tokenNums, int interArrivalTime, int serviceTime) {
 
 void *packetArrival(void* arg) {
     for (int i = 0; i < num; i++) {
-        doOnePacket(currentPacketId++, P, Default_Inter_Arrival_Time, Default_Service_Time);
+        if (DETERMINISTIC) {
+            doOnePacket(currentPacketId++, P, Default_Inter_Arrival_Time, Default_Service_Time);
+        } else {
+            char buf[1024];
+            if (fgets(buf, sizeof(buf), FILEDESCRIPTOR) != NULL) {
+                char* param;
+                char* s = "\t";
+                param = strtok(buf, s);
+                double interArrivalTime = atof(param);
+                param = strtok(NULL, s);
+                int numToken = atoi(param);
+                param = strtok(NULL, s);
+                double serviceTime = atof(param);
+                doOnePacket(currentPacketId++, numToken, interArrivalTime, serviceTime);
+            }   
+        }
     }
     packetRemaining = FALSE;
     // exit
@@ -174,6 +193,137 @@ void *serverOperation(void *arg) {
     return (0);
 }
 
+void processCommandLine(int argc, char* argv[]) {
+    // preprocess
+
+    if (argc % 2 == 0) {
+        fprintf(stderr, "Error: Number of command line arguments is incorrect. Please use: warmup2 [-lambda lambda] [-mu mu] [-r r] [-B B] [-P P] [-n num] [-t tsfile]\n");
+        exit(1);
+    }
+
+    // read command line
+    for (int i = 1; i < argc; i+=2) {
+        if (!strcmp(argv[i], "-lambda")) { // lambda
+            if (i + 1 >= argc) {
+                fprintf(stderr, "Error: Format Error: argument for -lambda is incorrect or missing. Please use [-lambda lambda]\n");
+                exit(1);
+            }
+            if (argv[i + 1][0] == '-') {
+                fprintf(stderr, "Error: Format Error: argument for -lambda is incorrect or missing. Please use [-lambda lambda]\n");
+                exit(1);
+            }
+            if (!sscanf(argv[i + 1], "%lf", &lambda)) {
+                fprintf(stderr, "Error: Format Error: argument for -lambda is incorrect and should be a double. Please use [-lambda lambda]\n");
+                exit(1);
+            }
+        } else if (!strcmp(argv[i], "-mu")) { // mu
+            if (i + 1 >= argc) {
+                fprintf(stderr, "Error: Format Error: argument for -mu is incorrect or missing. Please use [-mu mu]\n");
+                exit(1);
+            }
+            if (argv[i + 1][0] == '-') {
+                fprintf(stderr, "Error: Format Error: argument for -mu is incorrect or missing. Please use [-mu mu]\n");
+                exit(1);
+            }
+            if (!sscanf(argv[i + 1], "%lf", &mu)) {
+                fprintf(stderr, "Error: Format Error: argument for -mu is incorrect and should be a double. Please use [-mu mu]\n");
+                exit(1);
+            }
+        } else if (!strcmp(argv[i], "-r")) { // r
+            if (i + 1 >= argc) {
+                fprintf(stderr, "Error: Format Error: argument for -r is incorrect or missing. Please use [-r r]\n");
+                exit(1);
+            }
+            if (argv[i + 1][0] == '-') {
+                fprintf(stderr, "Error: Format Error: argument for -r is incorrect or missing. Please use [-r r]\n");
+                exit(1);
+            }
+            if (!sscanf(argv[i + 1], "%lf", &r)) {
+                fprintf(stderr, "Error: Format Error: argument for -r is incorrect and should be a double. Please use [-r r]\n");
+                exit(1);
+            }
+        }  else if (!strcmp(argv[i], "-B")) { // B
+            if (i + 1 >= argc) {
+                fprintf(stderr, "Error: Format Error: argument for -B is incorrect or missing. Please use [-B B]\n");
+                exit(1);
+            }
+            if (argv[i + 1][0] == '-') {
+                fprintf(stderr, "Error: Format Error: argument for -B is incorrect or missing. Please use [-B B]\n");
+                exit(1);
+            }
+            if (!sscanf(argv[i + 1], "%i", &B)) {
+                fprintf(stderr, "Error: Format Error: argument for -B is incorrect and should be a integer. Please use [-B B]\n");
+                exit(1);
+            }
+            if (B > MAX_B_P_NUM) {
+                fprintf(stderr, "Error: Value Error: argument for -B is incorrect and should be smaller than %d.\n", MAX_B_P_NUM);
+                exit(1);
+            }
+        } else if (!strcmp(argv[i], "-P")) {
+            if (i + 1 >= argc) {
+                fprintf(stderr, "Error: Format Error: argument for -P is incorrect or missing. Please use [-P P]\n");
+                exit(1);
+            }
+            if (argv[i + 1][0] == '-') {
+                fprintf(stderr, "Error: Format Error: argument for -P is incorrect or missing. Please use [-P P]\n");
+                exit(1);
+            }
+            if (!sscanf(argv[i + 1], "%i", &P)) {
+                fprintf(stderr, "Error: Format Error: argument for -P is incorrect and should be a integer. Please use [-P P]\n");
+                exit(1);
+            }
+            if (P > MAX_B_P_NUM) {
+                fprintf(stderr, "Error: Value Error: argument for -P is incorrect and should be no larger than %d.\n", MAX_B_P_NUM);
+                exit(1);
+            }
+        } else if (!strcmp(argv[i], "-n")) {
+            if (i + 1 >= argc) {
+                fprintf(stderr, "Error: Format Error: argument for -n is incorrect or missing. Please use [-n num]\n");
+                exit(1);
+            }
+            if (argv[i + 1][0] == '-') {
+                fprintf(stderr, "Error: Format Error: argument for -n is incorrect or missing. Please use [-n num]\n");
+                exit(1);
+            }
+            if (!sscanf(argv[i + 1], "%i", &num)) {
+                fprintf(stderr, "Error: Format Error: argument for -n is incorrect and should be a integer. Please use [-n num]\n");
+                exit(1);
+            }
+            if (num > MAX_B_P_NUM) {
+                fprintf(stderr, "Error: Value Error: argument for -n is incorrect and should be no larger than %d.\n", MAX_B_P_NUM);
+                exit(1);
+            }
+        } else if (!strcmp(argv[i], "-t")) {
+            if (i + 1 >= argc) {
+                fprintf(stderr, "Error: Format Error: argument for -t is incorrect or missing. Please use [-t tsfile]\n");
+                exit(1);
+            }
+            DETERMINISTIC = FALSE;
+            FILENAME = argv[i + 1];
+        } else {
+            fprintf(stderr, "Error: Format Error: Invalid arguments. Please use: warmup2 [-lambda lambda] [-mu mu] [-r r] [-B B] [-P P] [-n num] [-t tsfile]\n");
+            exit(1);
+        }
+    }
+}
+
+void processFile() {
+    FILEDESCRIPTOR = fopen(FILENAME, "r");
+    // catch error
+
+    // read first line
+    char buf[1024];
+    if (fgets(buf, sizeof(buf), FILEDESCRIPTOR) == NULL) {
+        fprintf(stderr, "Error: Missing information \n");
+        exit(1);
+    }
+    char* temp = buf;
+    num = atoi(temp);
+    if (num <= 0) {
+        fprintf(stderr, "Error: num should be larger than 0\n");
+        exit(1);
+    }
+}
 
 int main(int argc, char *argv[]) {
     // default
@@ -183,17 +333,27 @@ int main(int argc, char *argv[]) {
     B = 10;
     P = 3;
     num = 20; // default = 20;
+    DETERMINISTIC = TRUE;
+
     // test
     lambda = 2;
     mu = 0.35; 
     r = 4;
     B = 10;
     P = 3;
-    num = 1; // default = 20;
-    Default_Inter_Arrival_Time = min(1000.0 / lambda, MAX_RATE);
-    Default_Service_Time = min(1000.0 / mu, MAX_RATE);
-    Default_Token_Arrival_Time = min(1000.0 / r, MAX_RATE);
+    num = 3; // default = 20;
 
+    Default_Inter_Arrival_Time = 1000.0 / lambda;
+    Default_Service_Time = 1000.0 / mu;
+    Default_Token_Arrival_Time = 1000.0 / r;
+
+    processCommandLine(argc, argv);
+
+    if (DETERMINISTIC) {
+        Default_Inter_Arrival_Time = min(1000.0 / lambda, MAX_RATE);
+        Default_Service_Time = min(1000.0 / mu, MAX_RATE);
+        Default_Token_Arrival_Time = min(1000.0 / r, MAX_RATE);
+    }
 
     // init
     tokenBucket = 0;
@@ -204,7 +364,6 @@ int main(int argc, char *argv[]) {
     packetRemaining = TRUE;
     tokenRemaining = TRUE;
     gettimeofday(&START_TIME, NULL);
-
 
     // 
     My402ListInit(&Q1);
