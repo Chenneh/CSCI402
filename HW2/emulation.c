@@ -7,6 +7,7 @@ pthread_cond_t cv = PTHREAD_COND_INITIALIZER;
 My402List Q1, Q2;
 int tokenBucket;
 double lambda, mu, r;
+// B: token limit, P: packet require P tone, num: packet number
 int B, P, num;
 double Default_Inter_Arrival_Time, Default_Token_Arrival_Time;
 
@@ -27,8 +28,34 @@ double prevTokenTime;
 int packetRemaining;
 int tokenRemaining;
 
+// stat section
+double totalQ1Time;
+double totalQ2Time;
+double totalS1Time;
+double totalS2Time;
+
+double totalInSystemTime;
+double totalEmulationTime;
+double totalInterArrivalTime;
+double totalServiceTime;
+
+double averageInterArrivalTime;
+double averageServiceTime;
+double averageInSystemTime;
+double averageInSystemTimeSquare;
+double varianceInSystemTime;
+
+int tokenProduced;
+int tokenDropped;
+int packetArrived;
+int packetCompleted;
+int packetDropped;
+int packetRemoved; // control C
+
+
 // double curExpectedArrivalTime;
 struct timeval START_TIME;
+double endTime;
 
 void getRelativeTimeInMs(double *res) {
     struct timeval cur;
@@ -55,9 +82,13 @@ void doOnePacket(int id, int tokenNums, int interArrivalTime, int serviceTime) {
     // enqueue & dequeue operations
     pthread_mutex_lock(&m);
     getRelativeTimeInMs(&(newPacket->arrivalTime));
+    packetArrived++; // stat
     if (newPacket->tokenNums <= B) { // Valid packet
         fprintf(stdout, "%012.3fms: p%d arrives, needs %d tokens, inter-arrival time = %.3fms\n",
                 newPacket->arrivalTime, newPacket->id, newPacket->tokenNums, newPacket->arrivalTime - prevPacketTime);
+        totalInterArrivalTime += newPacket->arrivalTime - prevPacketTime; // ???
+        averageInterArrivalTime = totalInterArrivalTime / packetArrived; // running average
+        
         My402ListAppend(&Q1, newPacket);
         getRelativeTimeInMs(&(newPacket->Q1InTime));
         fprintf(stdout, "%012.3fms: p%d enters Q1\n", newPacket->Q1InTime, newPacket->id);
@@ -71,6 +102,7 @@ void doOnePacket(int id, int tokenNums, int interArrivalTime, int serviceTime) {
                 getRelativeTimeInMs(&(packetMoved->Q1OutTime));
                 fprintf(stdout, "%012.3fms: p%d leaves Q1, time in Q1 = %.3fms, token bucket now has %d token(s)\n", 
                         packetMoved->Q1OutTime, packetMoved->id, packetMoved->Q1OutTime - packetMoved->Q1InTime, tokenBucket);
+                totalQ1Time += (packetMoved->Q1OutTime - packetMoved->Q1InTime); // stat 
                 My402ListAppend(&Q2, packetMoved);
                 getRelativeTimeInMs(&(packetMoved->Q2InTime));
                 fprintf(stdout, "%012.3fms: p%d enters Q2\n", packetMoved->Q2InTime, packetMoved->id);
@@ -80,6 +112,7 @@ void doOnePacket(int id, int tokenNums, int interArrivalTime, int serviceTime) {
     } else { // invalid packet
         fprintf(stdout, "%012.3fms: p%d arrives, needs %d tokens, inter-arrival time = %.3fms, dropped\n",
                 newPacket->arrivalTime, newPacket->id, newPacket->tokenNums, newPacket->arrivalTime - prevPacketTime);
+        packetDropped++; // stat
     }
     prevPacketTime = newPacket->arrivalTime;
     pthread_mutex_unlock(&m);
@@ -93,7 +126,7 @@ void *packetArrival(void* arg) {
             char buf[1024];
             if (fgets(buf, sizeof(buf), FILEDESCRIPTOR) != NULL) {
                 char* param;
-                char* s = "\t";
+                char* s = " \t";
                 param = strtok(buf, s);
                 double interArrivalTime = atof(param);
                 param = strtok(NULL, s);
@@ -112,6 +145,11 @@ void *packetArrival(void* arg) {
 void doOneToken(int tokenArrivalTime) {
     double curArrivalTime;
     getRelativeTimeInMs(&curArrivalTime);
+    tokenProduced++;
+    if (tokenBucket >= B) {
+        fprintf(stdout, "%012.3fms: t%d arrives, dropped\n", curArrivalTime, currentTokenId++);
+        tokenDropped++;
+    }
     double curExpectedArrivalTime = prevTokenTime + tokenArrivalTime;
     if (curArrivalTime < curExpectedArrivalTime) {
         usleep((curExpectedArrivalTime - curArrivalTime) * 1000);
@@ -135,6 +173,7 @@ void doOneToken(int tokenArrivalTime) {
             getRelativeTimeInMs(&(packetMoved->Q1OutTime));
             fprintf(stdout, "%012.3fms: p%d leaves Q1, time in Q1 = %.3fms, token bucket now has %d token(s)\n", 
                         packetMoved->Q1OutTime, packetMoved->id, packetMoved->Q1OutTime - packetMoved->Q1InTime, tokenBucket);
+            totalQ1Time += (packetMoved->Q1OutTime - packetMoved->Q1InTime); // stat
             My402ListAppend(&Q2, packetMoved);
             getRelativeTimeInMs(&(packetMoved->Q2InTime));
             fprintf(stdout, "%012.3fms: p%d enters Q2\n", packetMoved->Q2InTime, packetMoved->id);
@@ -158,7 +197,7 @@ void *tokenDeposit(void *arg) {
 }
 
 void serveOne(int serverNum) {
-    pthread_mutex_lock(&m);
+    pthread_mutex_lock(&m); // lock
     while (My402ListLength(&Q2) == 0) {
         if (!tokenRemaining) {
             pthread_mutex_unlock(&m);
@@ -173,7 +212,8 @@ void serveOne(int serverNum) {
     My402ListUnlink(&Q2, packetMovedElem);
     fprintf(stdout, "%012.3fms: p%d leaves Q2, time in Q2 = %.3fms\n", 
             packetMoved->Q2OutTime, packetMoved->id, packetMoved->Q2OutTime - packetMoved->Q2InTime);
-    pthread_mutex_unlock(&m);
+    totalQ2Time += (packetMoved->Q2OutTime - packetMoved->Q2InTime); // stat
+    pthread_mutex_unlock(&m); // unlock
     double startServiceTime;
     getRelativeTimeInMs(&startServiceTime);
     fprintf(stdout, "%012.3fms: p%d begin service at S%d, requesting %dms of service\n", 
@@ -183,6 +223,15 @@ void serveOne(int serverNum) {
     getRelativeTimeInMs(&endServiceTime);
     fprintf(stdout, "%012.3fms: p%d departs from S%d, servie time = %.3fms, time in system = %.3fms\n", 
             endServiceTime, packetMoved->id, serverNum, endServiceTime - startServiceTime, endServiceTime - packetMoved->arrivalTime); 
+    // stat
+    packetCompleted++;
+    totalServiceTime += endServiceTime - startServiceTime;
+    averageServiceTime = totalServiceTime / (packetCompleted); // running average;
+    totalInSystemTime += (endServiceTime - packetMoved->arrivalTime); // ???
+    // ??? for square
+    averageInSystemTime = totalInSystemTime / packetCompleted; // running average of sys time
+    averageInSystemTimeSquare = totalInSystemTime * totalInSystemTime / packetCompleted; // running average of (sys time) ^ 2
+    varianceInSystemTime = averageInSystemTimeSquare - averageInSystemTime * averageInSystemTime;
 }   
 
 void *serverOperation(void *arg) {
@@ -259,7 +308,7 @@ void processCommandLine(int argc, char* argv[]) {
                 fprintf(stderr, "Error: Value Error: argument for -B is incorrect and should be smaller than %d.\n", MAX_B_P_NUM);
                 exit(1);
             }
-        } else if (!strcmp(argv[i], "-P")) {
+        } else if (!strcmp(argv[i], "-P")) { // P
             if (i + 1 >= argc) {
                 fprintf(stderr, "Error: Format Error: argument for -P is incorrect or missing. Please use [-P P]\n");
                 exit(1);
@@ -276,7 +325,7 @@ void processCommandLine(int argc, char* argv[]) {
                 fprintf(stderr, "Error: Value Error: argument for -P is incorrect and should be no larger than %d.\n", MAX_B_P_NUM);
                 exit(1);
             }
-        } else if (!strcmp(argv[i], "-n")) {
+        } else if (!strcmp(argv[i], "-n")) { // num
             if (i + 1 >= argc) {
                 fprintf(stderr, "Error: Format Error: argument for -n is incorrect or missing. Please use [-n num]\n");
                 exit(1);
@@ -293,7 +342,7 @@ void processCommandLine(int argc, char* argv[]) {
                 fprintf(stderr, "Error: Value Error: argument for -n is incorrect and should be no larger than %d.\n", MAX_B_P_NUM);
                 exit(1);
             }
-        } else if (!strcmp(argv[i], "-t")) {
+        } else if (!strcmp(argv[i], "-t")) { // tsfile
             if (i + 1 >= argc) {
                 fprintf(stderr, "Error: Format Error: argument for -t is incorrect or missing. Please use [-t tsfile]\n");
                 exit(1);
@@ -325,14 +374,31 @@ void processFile() {
     }
 }
 
-int main(int argc, char *argv[]) {
+void showParameters() {
+    fprintf(stdout, "Emulation Parameters:\n");
+    fprintf(stdout, "\tnumber to arrive = %i\n", num);
+    if (DETERMINISTIC)
+    {
+        fprintf(stdout, "\tlambda = %.6g\n", lambda);
+        fprintf(stdout, "\tmu = %.6g\n", mu);
+        fprintf(stdout, "\tr = %.6g\n", r);
+        fprintf(stdout, "\tB = %i\n", B);
+        fprintf(stdout, "\tP = %i\n", P);
+    } else {
+        fprintf(stdout, "\tr = %.6g\n", r);
+        fprintf(stdout, "\tB = %i\n", B);
+        fprintf(stdout, "\ttsfile = %s\n", FILENAME);
+    }
+}
+
+void processParameters(int argc, char* argv[]) {
     // default
     lambda = 1;
     mu = 0.35; 
     r = 1.5;
     B = 10;
     P = 3;
-    num = 20; // default = 20;
+    num = 20;
     DETERMINISTIC = TRUE;
 
     // test
@@ -342,6 +408,7 @@ int main(int argc, char *argv[]) {
     B = 10;
     P = 3;
     num = 3; // default = 20;
+    // test .......
 
     Default_Inter_Arrival_Time = 1000.0 / lambda;
     Default_Service_Time = 1000.0 / mu;
@@ -353,9 +420,59 @@ int main(int argc, char *argv[]) {
         Default_Inter_Arrival_Time = min(1000.0 / lambda, MAX_RATE);
         Default_Service_Time = min(1000.0 / mu, MAX_RATE);
         Default_Token_Arrival_Time = min(1000.0 / r, MAX_RATE);
+    } else {
+        processFile();
+    }
+}
+
+void showStat() {
+    if (packetArrived == 0) {
+        fprintf(stdout, "\taverage packet inter-arrival time = N/A, no packet arrived\n");
+    } else {
+        fprintf(stdout, "\taverage packet inter-arrival time = %.6g\n", averageInterArrivalTime / 1000.0);
+    }
+    if (packetCompleted == 0) {
+        fprintf(stdout, "\taverage packet inter-arrival time = N/A, no packet was served\n");
+    } else {
+        fprintf(stdout, "\taverage packet inter-arrival time = %.6g\n", averageServiceTime / 1000.0);
+    }
+    fprintf(stdout, "\n");
+    
+    fprintf(stdout, "\taverage number of packets in Q1 = %.6g\n", totalQ1Time / totalEmulationTime);
+    fprintf(stdout, "\taverage number of packets in Q2 = %.6g\n", totalQ2Time / totalEmulationTime);
+    fprintf(stdout, "\taverage number of packets in S1 = %.6g\n", totalS1Time / totalEmulationTime);
+    fprintf(stdout, "\taverage number of packets in S2 = %.6g\n", totalS2Time / totalEmulationTime);
+    
+    double stdDevSystemTime = sqrt(varianceInSystemTime);
+    if (packetCompleted == 0) { 
+        fprintf(stdout, "\taverage time a packet spent in system = N/A, no packet was completed\n");
+        fprintf(stdout, "\tstandard deviation for time spent in system = N/A, no packet was completed\n");
+    } else {
+        fprintf(stdout, "\taverage time a packet spent in system = %.6g\n", averageInSystemTime / 1000.0);
+        fprintf(stdout, "\tstandard deviation for time spent in system = %.6g\n", stdDevSystemTime / 1000.0);
+    }
+    fprintf(stdout, "\n");
+
+    
+    if (tokenProduced == 0) {
+        fprintf(stdout, "\ttoken drop probability = N/A, no tokens was produced\n");
+    } else {
+        double tokenDroppedProb = tokenDropped / tokenProduced * 1.0;
+        fprintf(stdout, "\ttoken drop probability = %.6g\n", tokenDroppedProb);
     }
 
-    // init
+    if (packetArrived == 0) {
+        fprintf(stdout, "\tpacket drop probability = N/A, no packets arrived\n");
+    } else {
+        double packetDroppedProb = packetDropped / packetArrived * 1.0;
+        fprintf(stdout, "\tpacket drop probability = %.6g\n", packetDroppedProb);
+    }
+    fprintf(stdout, "\n");
+
+}
+
+// init
+void init() {
     tokenBucket = 0;
     currentPacketId = 1;
     currentTokenId = 1;
@@ -365,7 +482,6 @@ int main(int argc, char *argv[]) {
     tokenRemaining = TRUE;
     gettimeofday(&START_TIME, NULL);
 
-    // 
     My402ListInit(&Q1);
     My402ListInit(&Q2);
     fprintf(stdout, "%012.3fms: emulation begins\n", 0.0);
@@ -373,14 +489,23 @@ int main(int argc, char *argv[]) {
     pthread_create(&tokenThread, 0, tokenDeposit, NULL);
     pthread_create(&serverThread1, 0, serverOperation, (void*) 1);
     pthread_create(&serverThread2, 0, serverOperation, (void*) 2);
+}
 
+void end() {
     pthread_join(packetThread, NULL);
     pthread_join(tokenThread, NULL);
     pthread_join(serverThread1, NULL);
     pthread_join(serverThread2, NULL);
 
-    double endTime;
     getRelativeTimeInMs(&endTime);
+    totalEmulationTime = endTime;
     fprintf(stdout, "%012.3fms: emulation ends\n", endTime);
+}
 
+int main(int argc, char *argv[]) {
+    processParameters(argc, argv);
+    showParameters();
+    init();
+    end();
+    showStat();
 }

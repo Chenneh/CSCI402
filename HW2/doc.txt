@@ -1,0 +1,20 @@
+1. The value printed for "inter-arrival time" must equal to the timestamp of the "p1 arrives" event minus the timestamp of the "arrives" event for the previous packet.
+2. The value printed for "time in Q1" must equal to the timestamp of the "p1 leaves Q1" event minus the timestamp of the "p1 enters Q1" event.
+3. The value printed for "time in Q2" must equal to the timestamp of the "p1 leaves Q2" event minus the timestamp of the "p1 enters Q2" event.
+4. The value printed for "requesting ???ms of service" must be the requested service time (which must be an integer) of the corresponding packet.
+5. The value printed for "service time" must equal to the timestamp of the "p1 departs from S1" event minus the timestamp of the "p1 begins service at S1" event (and it should be larger than the requested service time printed for the "begin service" event).
+6. The value printed for "time in system" must equal to the timestamp of the "p1 departs from S1" event minus the timestamp of the "p1 arrives" event;
+
+average packet inter-arrival time = <real-value>
+average packet service time = <real-value>
+
+average number of packets in Q1 = <real-value>
+average number of packets in Q2 = <real-value>
+average number of packets at S1 = <real-value>
+average number of packets at S2 = <real-value>
+
+average time a packet spent in system = <real-value>
+standard deviation for time spent in system = <real-value>
+
+token drop probability = <real-value>
+packet drop probability = <real-value>

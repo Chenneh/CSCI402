@@ -8,6 +8,7 @@
 #include <errno.h>
 #include <unistd.h>
 #include <pthread.h>
+#include <math.h>
 
 #include "cs402.h"
 #include "my402list.h"
