@@ -224,6 +224,12 @@ void serveOne(int serverNum) {
     fprintf(stdout, "%012.3fms: p%d departs from S%d, servie time = %.3fms, time in system = %.3fms\n", 
             endServiceTime, packetMoved->id, serverNum, endServiceTime - startServiceTime, endServiceTime - packetMoved->arrivalTime); 
     // stat
+    if (serverNum == 1) {
+        totalS1Time += endServiceTime - startServiceTime;
+    }
+    if (serverNum == 2) {
+        totalS2Time += endServiceTime - startServiceTime;
+    }
     packetCompleted++;
     totalServiceTime += endServiceTime - startServiceTime;
     averageServiceTime = totalServiceTime / (packetCompleted); // running average;
