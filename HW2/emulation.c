@@ -100,8 +100,12 @@ void doOnePacket(int id, int tokenNums, int interArrivalTime, int serviceTime) {
                 tokenBucket -= packetMoved->tokenNums;
                 My402ListUnlink(&Q1, packetMovedElem);
                 getRelativeTimeInMs(&(packetMoved->Q1OutTime));
-                fprintf(stdout, "%012.3fms: p%d leaves Q1, time in Q1 = %.3fms, token bucket now has %d token(s)\n", 
-                        packetMoved->Q1OutTime, packetMoved->id, packetMoved->Q1OutTime - packetMoved->Q1InTime, tokenBucket);
+                char plural = ' ';
+                if (tokenBucket > 1) {
+                    plural = 's';
+                }
+                fprintf(stdout, "%012.3fms: p%d leaves Q1, time in Q1 = %.3fms, token bucket now has %d token%c\n", 
+                        packetMoved->Q1OutTime, packetMoved->id, packetMoved->Q1OutTime - packetMoved->Q1InTime, tokenBucket, plural);
                 totalQ1Time += (packetMoved->Q1OutTime - packetMoved->Q1InTime); // stat 
                 My402ListAppend(&Q2, packetMoved);
                 getRelativeTimeInMs(&(packetMoved->Q2InTime));
@@ -110,8 +114,12 @@ void doOnePacket(int id, int tokenNums, int interArrivalTime, int serviceTime) {
             }
         } 
     } else { // invalid packet
-        fprintf(stdout, "%012.3fms: p%d arrives, needs %d tokens, inter-arrival time = %.3fms, dropped\n",
-                newPacket->arrivalTime, newPacket->id, newPacket->tokenNums, newPacket->arrivalTime - prevPacketTime);
+        char plural = ' ';
+        if (tokenBucket > 1) {
+            plural = 's';
+        }
+        fprintf(stdout, "%012.3fms: p%d arrives, needs %d token%c, inter-arrival time = %.3fms, dropped\n",
+                newPacket->arrivalTime, newPacket->id, newPacket->tokenNums, plural, newPacket->arrivalTime - prevPacketTime);
         packetDropped++; // stat
     }
     prevPacketTime = newPacket->arrivalTime;
@@ -147,7 +155,7 @@ void doOneToken(int tokenArrivalTime) {
     getRelativeTimeInMs(&curArrivalTime);
     tokenProduced++;
     if (tokenBucket >= B) {
-        fprintf(stdout, "%012.3fms: t%d arrives, dropped\n", curArrivalTime, currentTokenId++);
+        fprintf(stdout, "%012.3fms: token t%d arrives, dropped\n", curArrivalTime, currentTokenId++);
         tokenDropped++;
     }
     double curExpectedArrivalTime = prevTokenTime + tokenArrivalTime;
@@ -161,7 +169,7 @@ void doOneToken(int tokenArrivalTime) {
         plural = 's';
     }
     getRelativeTimeInMs(&curArrivalTime);
-    fprintf(stdout, "%012.3fms: t%d arrives, token bucket now has %d token%c\n",
+    fprintf(stdout, "%012.3fms: token t%d arrives, token bucket now has %d token%c\n",
                 curArrivalTime, currentTokenId, tokenBucket, plural);
     if (My402ListLength(&Q1) > 0) {
         My402ListElem* packetMovedElem = My402ListFirst(&Q1);
@@ -171,8 +179,12 @@ void doOneToken(int tokenArrivalTime) {
 
             My402ListUnlink(&Q1, packetMovedElem);
             getRelativeTimeInMs(&(packetMoved->Q1OutTime));
-            fprintf(stdout, "%012.3fms: p%d leaves Q1, time in Q1 = %.3fms, token bucket now has %d token(s)\n", 
-                        packetMoved->Q1OutTime, packetMoved->id, packetMoved->Q1OutTime - packetMoved->Q1InTime, tokenBucket);
+            char plural = ' ';
+            if (tokenBucket > 1) {
+                plural = 's';
+            }
+            fprintf(stdout, "%012.3fms: p%d leaves Q1, time in Q1 = %.3fms, token bucket now has %d token%c\n", 
+                        packetMoved->Q1OutTime, packetMoved->id, packetMoved->Q1OutTime - packetMoved->Q1InTime, tokenBucket, plural);
             totalQ1Time += (packetMoved->Q1OutTime - packetMoved->Q1InTime); // stat
             My402ListAppend(&Q2, packetMoved);
             getRelativeTimeInMs(&(packetMoved->Q2InTime));
@@ -192,7 +204,7 @@ void *tokenDeposit(void *arg) {
     }
     tokenRemaining = FALSE;
     //eixt
-
+    
     return (0);
 }
 
@@ -200,8 +212,7 @@ void serveOne(int serverNum) {
     pthread_mutex_lock(&m); // lock
     while (My402ListLength(&Q2) == 0) {
         if (!tokenRemaining) {
-            pthread_mutex_unlock(&m);
-            // eixt
+            
             return; 
         }
         pthread_cond_wait(&cv, &m);
@@ -233,10 +244,13 @@ void serveOne(int serverNum) {
     packetCompleted++;
     totalServiceTime += endServiceTime - startServiceTime;
     averageServiceTime = totalServiceTime / (packetCompleted); // running average;
-    totalInSystemTime += (endServiceTime - packetMoved->arrivalTime); // ???
+    double curInSysTime = endServiceTime - packetMoved->arrivalTime;
+    totalInSystemTime += curInSysTime; // ???
     // ??? for square
-    averageInSystemTime = totalInSystemTime / packetCompleted; // running average of sys time
-    averageInSystemTimeSquare = totalInSystemTime * totalInSystemTime / packetCompleted; // running average of (sys time) ^ 2
+    averageInSystemTime = (averageInSystemTime * (packetCompleted - 1) + curInSysTime) / packetCompleted;
+    // averageInSystemTime = totalInSystemTime / packetCompleted; // running average of sys time
+    averageInSystemTimeSquare = (averageInSystemTimeSquare * (packetCompleted - 1) + curInSysTime * curInSysTime) / packetCompleted;
+    // averageInSystemTimeSquare = totalInSystemTime * totalInSystemTime / packetCompleted; // running average of (sys time) ^ 2
     varianceInSystemTime = averageInSystemTimeSquare - averageInSystemTime * averageInSystemTime;
 }   
 
@@ -244,6 +258,8 @@ void *serverOperation(void *arg) {
     while (My402ListLength(&Q2) > 0 || My402ListLength(&Q1) > 0 || tokenRemaining) {
         serveOne((int) arg);
     }
+    pthread_mutex_unlock(&m);
+    pthread_cond_broadcast(&cv);
     // exit;
     return (0);
 }
@@ -271,6 +287,7 @@ void processCommandLine(int argc, char* argv[]) {
                 fprintf(stderr, "Error: Format Error: argument for -lambda is incorrect and should be a double. Please use [-lambda lambda]\n");
                 exit(1);
             }
+            lambda = atof(argv[i + 1]);
         } else if (!strcmp(argv[i], "-mu")) { // mu
             if (i + 1 >= argc) {
                 fprintf(stderr, "Error: Format Error: argument for -mu is incorrect or missing. Please use [-mu mu]\n");
@@ -284,6 +301,7 @@ void processCommandLine(int argc, char* argv[]) {
                 fprintf(stderr, "Error: Format Error: argument for -mu is incorrect and should be a double. Please use [-mu mu]\n");
                 exit(1);
             }
+            mu = atof(argv[i + 1]);
         } else if (!strcmp(argv[i], "-r")) { // r
             if (i + 1 >= argc) {
                 fprintf(stderr, "Error: Format Error: argument for -r is incorrect or missing. Please use [-r r]\n");
@@ -297,6 +315,7 @@ void processCommandLine(int argc, char* argv[]) {
                 fprintf(stderr, "Error: Format Error: argument for -r is incorrect and should be a double. Please use [-r r]\n");
                 exit(1);
             }
+            r = atof(argv[i + 1]);
         }  else if (!strcmp(argv[i], "-B")) { // B
             if (i + 1 >= argc) {
                 fprintf(stderr, "Error: Format Error: argument for -B is incorrect or missing. Please use [-B B]\n");
@@ -314,6 +333,7 @@ void processCommandLine(int argc, char* argv[]) {
                 fprintf(stderr, "Error: Value Error: argument for -B is incorrect and should be smaller than %d.\n", MAX_B_P_NUM);
                 exit(1);
             }
+            B = atoi(argv[i + 1]);
         } else if (!strcmp(argv[i], "-P")) { // P
             if (i + 1 >= argc) {
                 fprintf(stderr, "Error: Format Error: argument for -P is incorrect or missing. Please use [-P P]\n");
@@ -331,6 +351,7 @@ void processCommandLine(int argc, char* argv[]) {
                 fprintf(stderr, "Error: Value Error: argument for -P is incorrect and should be no larger than %d.\n", MAX_B_P_NUM);
                 exit(1);
             }
+            P = atoi(argv[i + 1]);
         } else if (!strcmp(argv[i], "-n")) { // num
             if (i + 1 >= argc) {
                 fprintf(stderr, "Error: Format Error: argument for -n is incorrect or missing. Please use [-n num]\n");
@@ -348,6 +369,7 @@ void processCommandLine(int argc, char* argv[]) {
                 fprintf(stderr, "Error: Value Error: argument for -n is incorrect and should be no larger than %d.\n", MAX_B_P_NUM);
                 exit(1);
             }
+            num = atoi(argv[i + 1]);
         } else if (!strcmp(argv[i], "-t")) { // tsfile
             if (i + 1 >= argc) {
                 fprintf(stderr, "Error: Format Error: argument for -t is incorrect or missing. Please use [-t tsfile]\n");
@@ -408,12 +430,12 @@ void processParameters(int argc, char* argv[]) {
     DETERMINISTIC = TRUE;
 
     // test
-    lambda = 2;
-    mu = 0.35; 
-    r = 4;
-    B = 10;
-    P = 3;
-    num = 3; // default = 20;
+    // lambda = 2;
+    // mu = 0.35; 
+    // r = 4;
+    // B = 10;
+    // P = 3;
+    // num = 3; // default = 20;
     // test .......
 
     Default_Inter_Arrival_Time = 1000.0 / lambda;
