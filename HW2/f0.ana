@@ -1,0 +1,63 @@
+
+==== Packets ====
+p1: inter-arrival time should be 230.972ms
+    time in Q1 should be 1810.518ms
+    time in Q2 should be 0.014ms
+    should request 153ms of service time
+    time in S2 should be 170.629ms
+    time in system should be 1981.204ms
+
+p2: inter-arrival time should be 2206.007ms
+    time in Q1 should be 282.126ms
+    time in Q2 should be 0.012ms
+    should request 3741ms of service time
+    time in S1 should be 3757.316ms
+    time in system should be 4039.479ms
+
+p3: inter-arrival time should be 2369.262ms
+    time in Q1 should be 0.003ms
+    time in Q2 should be 0.013ms
+    should request 228ms of service time
+    time in S2 should be 236.012ms
+    time in system should be 236.042ms
+
+p4: inter-arrival time should be 1670.234ms
+
+p5: inter-arrival time should be 1760.732ms
+
+p6: inter-arrival time should be 126.200ms
+
+p7: inter-arrival time should be 1529.777ms
+    time in Q1 should be 0.003ms
+    time in Q2 should be 0.013ms
+    should request 5437ms of service time
+    time in S1 should be 5453.115ms
+    time in system should be 5453.147ms
+
+p8: inter-arrival time should be 8245.361ms
+    time in Q1 should be 0.003ms
+    time in Q2 should be 0.012ms
+    should request 8007ms of service time
+    time in S1 should be 8020.624ms
+    time in system should be 8020.654ms
+
+p9: inter-arrival time should be 992.079ms
+
+p10: inter-arrival time should be 5984.340ms
+    time in Q1 should be 0.003ms
+    time in Q2 should be 0.013ms
+    should request 1555ms of service time
+    time in S2 should be 1584.111ms
+    time in system should be 1584.141ms
+
+==== Statistics ====
+average packet inter-arrival time = 2.5114964
+average packet service time = 3.2036345
+average number of packets in Q1 = 0.0783788719647259
+average number of packets in Q2 = 2.88397765389242e-06
+average number of packets in S1 = 0.645376332116769
+average number of packets in S2 = 0.0745621335382031
+average time a packet spent in system = 3.5524445
+standard deviation for time spent in system = 2.61904275300937
+token drop probability = 0
+packet drop probability = 0.4

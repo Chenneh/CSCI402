@@ -9,6 +9,7 @@
 #include <unistd.h>
 #include <pthread.h>
 #include <math.h>
+#include <sys/stat.h>
 
 #include "cs402.h"
 #include "my402list.h"
@@ -26,3 +27,18 @@ typedef struct emulationPacket
     double Q2OutTime;
 
 } Packet;
+
+void getRelativeTimeInMs(double *res);
+void doOnePacket(int id, int tokenNums, double interArrivalTime, double serviceTime);
+void *packetArrival(void* arg);
+void doOneToken(int tokenArrivalTime);
+void *tokenDeposit(void *arg);
+void serveOne(int serverNum);
+void *serverOperation(void *arg);
+void removeAll(My402List* list, int numQ);
+void *cancellation();
+void processCommandLine(int argc, char* argv[]);
+void processFile();
+void showParameters();
+void processParameters(int argc, char* argv[]);
+void showStat();

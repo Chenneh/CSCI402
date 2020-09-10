@@ -1,8 +1,13 @@
 #include "emulation.h"
 
-pthread_t packetThread, tokenThread, serverThread1, serverThread2;
+pthread_t packetThread, tokenThread, serverThread1, serverThread2, cancellationThread;
 pthread_mutex_t m = PTHREAD_MUTEX_INITIALIZER;
 pthread_cond_t cv = PTHREAD_COND_INITIALIZER;
+int EndSignal;
+
+// cancellation
+sigset_t set, oldset;
+
 
 My402List Q1, Q2;
 int tokenBucket;
@@ -29,15 +34,15 @@ int packetRemaining;
 int tokenRemaining;
 
 // stat section
-double totalQ1Time;
-double totalQ2Time;
-double totalS1Time;
-double totalS2Time;
+double totalQ1Time = 0.0;
+double totalQ2Time = 0.0;
+double totalS1Time = 0.0;
+double totalS2Time = 0.0;
 
-double totalInSystemTime;
-double totalEmulationTime;
-double totalInterArrivalTime;
-double totalServiceTime;
+double totalInSystemTime = 0.0;
+double totalEmulationTime = 0.0;
+double totalInterArrivalTime = 0.0;
+double totalServiceTime = 0.0;
 
 double averageInterArrivalTime;
 double averageServiceTime;
@@ -45,12 +50,12 @@ double averageInSystemTime;
 double averageInSystemTimeSquare;
 double varianceInSystemTime;
 
-int tokenProduced;
-int tokenDropped;
-int packetArrived;
-int packetCompleted;
-int packetDropped;
-int packetRemoved; // control C
+int tokenProduced = 0;
+int tokenDropped = 0;
+int packetArrived = 0;
+int packetCompleted = 0;
+int packetDropped = 0;
+int packetRemoved = 0; // control C
 
 
 // double curExpectedArrivalTime;
@@ -63,13 +68,15 @@ void getRelativeTimeInMs(double *res) {
     *res = (cur.tv_sec * 1000.0 + cur.tv_usec / 1000.0) - (START_TIME.tv_sec * 1000.0 + START_TIME.tv_usec / 1000.0);
 }
 
-void doOnePacket(int id, int tokenNums, int interArrivalTime, int serviceTime) {
-    // find current arrival time and expected arrival time = prev + curInter
+void doOnePacket(int id, int tokenNums, double interArrivalTime, double serviceTime) {
     double curArrivalTime;
     getRelativeTimeInMs(&(curArrivalTime));
-    double curExpectedArrivalTime = prevPacketTime + interArrivalTime;
-    if (curArrivalTime < curExpectedArrivalTime) {
-        usleep((curExpectedArrivalTime - curArrivalTime) * 1000);
+    double diff = prevPacketTime + interArrivalTime - curArrivalTime;
+    // double curExpectedArrivalTime = prevPacketTime + interArrivalTime;
+    if (diff > 0) {
+        pthread_setcancelstate(PTHREAD_CANCEL_ENABLE, 0);
+        usleep((diff) * 1000);
+        pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, 0);
     }
     // make packet
     Packet *newPacket = (Packet*)malloc(sizeof(Packet));
@@ -77,18 +84,21 @@ void doOnePacket(int id, int tokenNums, int interArrivalTime, int serviceTime) {
     newPacket->tokenNums = tokenNums;
     newPacket->interArrivalTime = interArrivalTime;
     newPacket->serviceTime = serviceTime;
-    // newPacket->arrivalTime = curArrivalTime;
+    // getRelativeTimeInMs(&(newPacket->arrivalTime));
     
     // enqueue & dequeue operations
     pthread_mutex_lock(&m);
+    if (EndSignal) {
+        pthread_mutex_unlock(&m);
+        return;
+    }
     getRelativeTimeInMs(&(newPacket->arrivalTime));
     packetArrived++; // stat
+    totalInterArrivalTime += newPacket->arrivalTime - prevPacketTime; // ???
+    averageInterArrivalTime = totalInterArrivalTime / packetArrived; // running average
     if (newPacket->tokenNums <= B) { // Valid packet
         fprintf(stdout, "%012.3fms: p%d arrives, needs %d tokens, inter-arrival time = %.3fms\n",
                 newPacket->arrivalTime, newPacket->id, newPacket->tokenNums, newPacket->arrivalTime - prevPacketTime);
-        totalInterArrivalTime += newPacket->arrivalTime - prevPacketTime; // ???
-        averageInterArrivalTime = totalInterArrivalTime / packetArrived; // running average
-        
         My402ListAppend(&Q1, newPacket);
         getRelativeTimeInMs(&(newPacket->Q1InTime));
         fprintf(stdout, "%012.3fms: p%d enters Q1\n", newPacket->Q1InTime, newPacket->id);
@@ -115,7 +125,7 @@ void doOnePacket(int id, int tokenNums, int interArrivalTime, int serviceTime) {
         } 
     } else { // invalid packet
         char plural = ' ';
-        if (tokenBucket > 1) {
+        if (newPacket->tokenNums > 1) {
             plural = 's';
         }
         fprintf(stdout, "%012.3fms: p%d arrives, needs %d token%c, inter-arrival time = %.3fms, dropped\n",
@@ -127,6 +137,7 @@ void doOnePacket(int id, int tokenNums, int interArrivalTime, int serviceTime) {
 }
 
 void *packetArrival(void* arg) {
+    pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, 0);
     for (int i = 0; i < num; i++) {
         if (DETERMINISTIC) {
             doOnePacket(currentPacketId++, P, Default_Inter_Arrival_Time, Default_Service_Time);
@@ -145,52 +156,67 @@ void *packetArrival(void* arg) {
             }   
         }
     }
+    
     packetRemaining = FALSE;
-    // exit
-    return (0);
+    pthread_cond_broadcast(&cv);
+    pthread_exit(NULL);
+    // return (0);
 }
 
 void doOneToken(int tokenArrivalTime) {
     double curArrivalTime;
     getRelativeTimeInMs(&curArrivalTime);
+    double diff = prevTokenTime + tokenArrivalTime - curArrivalTime;
+    // double curExpectedArrivalTime = prevTokenTime + tokenArrivalTime;
+    if (diff > 0) {
+        pthread_setcancelstate(PTHREAD_CANCEL_ENABLE, 0);
+        usleep((diff) * 1000);
+        pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, 0);
+    }
     tokenProduced++;
-    if (tokenBucket >= B) {
-        fprintf(stdout, "%012.3fms: token t%d arrives, dropped\n", curArrivalTime, currentTokenId++);
-        tokenDropped++;
-    }
-    double curExpectedArrivalTime = prevTokenTime + tokenArrivalTime;
-    if (curArrivalTime < curExpectedArrivalTime) {
-        usleep((curExpectedArrivalTime - curArrivalTime) * 1000);
-    }
     pthread_mutex_lock(&m);
-    tokenBucket++;
-    char plural = ' ';
-    if (tokenBucket > 1) {
-        plural = 's';
+    if (EndSignal) {
+        pthread_mutex_unlock(&m);
+        return;
     }
-    getRelativeTimeInMs(&curArrivalTime);
-    fprintf(stdout, "%012.3fms: token t%d arrives, token bucket now has %d token%c\n",
-                curArrivalTime, currentTokenId, tokenBucket, plural);
-    if (My402ListLength(&Q1) > 0) {
-        My402ListElem* packetMovedElem = My402ListFirst(&Q1);
-        Packet* packetMoved = packetMovedElem->obj;
-        if (tokenBucket >= packetMoved->tokenNums) {
-            tokenBucket -= packetMoved->tokenNums; // why must be zero?
-
-            My402ListUnlink(&Q1, packetMovedElem);
-            getRelativeTimeInMs(&(packetMoved->Q1OutTime));
+    
+    if (tokenBucket < B) {
+        if (tokenBucket >= B) {
+            fprintf(stdout, "%012.3fms: token t%d arrives, dropped\n", curArrivalTime, currentTokenId++);
+            tokenDropped++;
+        } else {
+            tokenBucket++;
             char plural = ' ';
             if (tokenBucket > 1) {
                 plural = 's';
             }
-            fprintf(stdout, "%012.3fms: p%d leaves Q1, time in Q1 = %.3fms, token bucket now has %d token%c\n", 
-                        packetMoved->Q1OutTime, packetMoved->id, packetMoved->Q1OutTime - packetMoved->Q1InTime, tokenBucket, plural);
-            totalQ1Time += (packetMoved->Q1OutTime - packetMoved->Q1InTime); // stat
-            My402ListAppend(&Q2, packetMoved);
-            getRelativeTimeInMs(&(packetMoved->Q2InTime));
-            fprintf(stdout, "%012.3fms: p%d enters Q2\n", packetMoved->Q2InTime, packetMoved->id);
-            pthread_cond_broadcast(&cv);
-            // *(Packet*) (My402ListFirst(&Q2)->obj)
+            getRelativeTimeInMs(&curArrivalTime);
+            fprintf(stdout, "%012.3fms: token t%d arrives, token bucket now has %d token%c\n",
+                        curArrivalTime, currentTokenId, tokenBucket, plural);
+            while (My402ListLength(&Q1) > 0) {
+                My402ListElem* packetMovedElem = My402ListFirst(&Q1);
+                Packet* packetMoved = packetMovedElem->obj;
+                if (packetMoved->tokenNums > tokenBucket) {
+                    break;
+                }
+                if (tokenBucket >= packetMoved->tokenNums) {
+                    tokenBucket -= packetMoved->tokenNums; // why must be zero?
+
+                    My402ListUnlink(&Q1, packetMovedElem);
+                    getRelativeTimeInMs(&(packetMoved->Q1OutTime));
+                    char plural = ' ';
+                    if (tokenBucket > 1) {
+                        plural = 's';
+                    }
+                    fprintf(stdout, "%012.3fms: p%d leaves Q1, time in Q1 = %.3fms, token bucket now has %d token%c\n", 
+                                packetMoved->Q1OutTime, packetMoved->id, packetMoved->Q1OutTime - packetMoved->Q1InTime, tokenBucket, plural);
+                    totalQ1Time += (packetMoved->Q1OutTime - packetMoved->Q1InTime); // stat
+                    My402ListAppend(&Q2, packetMoved);
+                    getRelativeTimeInMs(&(packetMoved->Q2InTime));
+                    fprintf(stdout, "%012.3fms: p%d enters Q2\n", packetMoved->Q2InTime, packetMoved->id);
+                    pthread_cond_broadcast(&cv);
+                }
+            }
         }
     }
     currentTokenId++;
@@ -199,23 +225,25 @@ void doOneToken(int tokenArrivalTime) {
 }
 
 void *tokenDeposit(void *arg) {
-    while (!My402ListLength(&Q1) == 0 || packetRemaining) {
+    pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, 0);
+    while ((!My402ListLength(&Q1) == 0 || packetRemaining) && !EndSignal) {
         doOneToken(Default_Token_Arrival_Time);
     }
     tokenRemaining = FALSE;
-    //eixt
+    pthread_cond_broadcast(&cv);
     
-    return (0);
+    pthread_exit(NULL);
+    
+    // return (0);
 }
 
 void serveOne(int serverNum) {
     pthread_mutex_lock(&m); // lock
-    while (My402ListLength(&Q2) == 0) {
-        if (!tokenRemaining) {
-            
-            return; 
-        }
+    while (My402ListLength(&Q2) == 0 && !EndSignal && tokenRemaining) {
         pthread_cond_wait(&cv, &m);
+    }
+    if (My402ListLength(&Q2) == 0 || EndSignal) {
+        return;
     }
     My402ListElem* packetMovedElem = My402ListFirst(&Q2);
     Packet* packetMoved = (Packet* )packetMovedElem->obj;
@@ -225,6 +253,8 @@ void serveOne(int serverNum) {
             packetMoved->Q2OutTime, packetMoved->id, packetMoved->Q2OutTime - packetMoved->Q2InTime);
     totalQ2Time += (packetMoved->Q2OutTime - packetMoved->Q2InTime); // stat
     pthread_mutex_unlock(&m); // unlock
+    
+    // can be done concurrenly
     double startServiceTime;
     getRelativeTimeInMs(&startServiceTime);
     fprintf(stdout, "%012.3fms: p%d begin service at S%d, requesting %dms of service\n", 
@@ -234,33 +264,64 @@ void serveOne(int serverNum) {
     getRelativeTimeInMs(&endServiceTime);
     fprintf(stdout, "%012.3fms: p%d departs from S%d, servie time = %.3fms, time in system = %.3fms\n", 
             endServiceTime, packetMoved->id, serverNum, endServiceTime - startServiceTime, endServiceTime - packetMoved->arrivalTime); 
+    
     // stat
+    // pthread_mutex_lock(&m);
+    double curServiceTime = endServiceTime - startServiceTime;
     if (serverNum == 1) {
-        totalS1Time += endServiceTime - startServiceTime;
+        totalS1Time += curServiceTime;
     }
     if (serverNum == 2) {
-        totalS2Time += endServiceTime - startServiceTime;
+        totalS2Time += curServiceTime;
     }
     packetCompleted++;
     totalServiceTime += endServiceTime - startServiceTime;
     averageServiceTime = totalServiceTime / (packetCompleted); // running average;
     double curInSysTime = endServiceTime - packetMoved->arrivalTime;
-    totalInSystemTime += curInSysTime; // ???
-    // ??? for square
-    averageInSystemTime = (averageInSystemTime * (packetCompleted - 1) + curInSysTime) / packetCompleted;
-    // averageInSystemTime = totalInSystemTime / packetCompleted; // running average of sys time
-    averageInSystemTimeSquare = (averageInSystemTimeSquare * (packetCompleted - 1) + curInSysTime * curInSysTime) / packetCompleted;
-    // averageInSystemTimeSquare = totalInSystemTime * totalInSystemTime / packetCompleted; // running average of (sys time) ^ 2
+    totalInSystemTime += curInSysTime;
+    averageInSystemTime = (averageInSystemTime * (packetCompleted - 1) + curInSysTime) / packetCompleted; // running average
+    averageInSystemTimeSquare = (averageInSystemTimeSquare * (packetCompleted - 1) + curInSysTime * curInSysTime) / packetCompleted; // running average
     varianceInSystemTime = averageInSystemTimeSquare - averageInSystemTime * averageInSystemTime;
+    // pthread_mutex_unlock(&m);
 }   
 
 void *serverOperation(void *arg) {
-    while (My402ListLength(&Q2) > 0 || My402ListLength(&Q1) > 0 || tokenRemaining) {
+    while ((My402ListLength(&Q2) > 0 || My402ListLength(&Q1) > 0 || tokenRemaining) && !EndSignal) {
         serveOne((int) arg);
     }
     pthread_mutex_unlock(&m);
     pthread_cond_broadcast(&cv);
-    // exit;
+    pthread_exit(NULL);
+}
+
+void removeAll(My402List* list, int numQ) {
+    while (!My402ListEmpty(list)) {
+        My402ListElem* curElem = My402ListFirst(list);
+        Packet* curPacket = (Packet*) (curElem->obj);
+        My402ListUnlink(list, curElem);
+        double curTime;
+        getRelativeTimeInMs(&curTime);
+        fprintf(stdout, "%012.3fms: p%d removed from Q%d\n", curTime, curPacket->id, numQ);
+        // packetRemoved++;
+    }
+}
+
+void *cancellation() {
+    while (1) {
+        int sig;
+        sigwait(&set, &sig);
+        pthread_mutex_lock(&m);
+        EndSignal = TRUE;
+        fprintf(stdout, "SIGINT caught, no new packets or tokens will be allowed\n");
+        pthread_cancel(packetThread);
+        pthread_cancel(tokenThread);
+        pthread_cond_broadcast(&cv);
+        removeAll(&Q1, 1);
+        removeAll(&Q2, 2);
+        // showStat();
+        pthread_mutex_unlock(&m);
+        pthread_exit(NULL);
+    }
     return (0);
 }
 
@@ -385,19 +446,40 @@ void processCommandLine(int argc, char* argv[]) {
 }
 
 void processFile() {
+    struct stat st;
+    stat(FILENAME, &st);
     FILEDESCRIPTOR = fopen(FILENAME, "r");
     // catch error
+    if (S_ISDIR(st.st_mode)) {
+        fprintf(stderr, "Error: The file %s is is a directory\n", FILENAME);
+        exit(1);
+    }
+    if (FILEDESCRIPTOR == NULL) {
+        fprintf(stderr, "%s: ", strerror(errno));
+        fprintf(stderr, "%s\n", FILENAME);
+        exit(1);
+    }
 
     // read first line
     char buf[1024];
     if (fgets(buf, sizeof(buf), FILEDESCRIPTOR) == NULL) {
-        fprintf(stderr, "Error: Missing information \n");
+        fprintf(stderr, "Error: input file %s error: Missing information\n", FILENAME);
         exit(1);
     }
+    char s = '\t';
     char* temp = buf;
+    char* temp2 = strchr(temp, s);
+    if (temp2 != NULL) {
+        fprintf(stderr, "Error: input file %s error: more than one element in the first line\n", FILENAME);
+        exit(1);
+    }
+    if (temp[0] == '-') {
+        fprintf(stderr, "Error: input file %s error: line 1 is not just a number\n", FILENAME);
+        exit(1);
+    }
     num = atoi(temp);
     if (num <= 0) {
-        fprintf(stderr, "Error: num should be larger than 0\n");
+        fprintf(stderr, "Error: input file %s error: line 1 is not just a number or the number is invalid\n", FILENAME);
         exit(1);
     }
 }
@@ -421,6 +503,8 @@ void showParameters() {
 
 void processParameters(int argc, char* argv[]) {
     // default
+    // B: token limit, P: packet require P tone, num: packet number
+    // lambda: inter; mu: service; r: token
     lambda = 1;
     mu = 0.35; 
     r = 1.5;
@@ -428,21 +512,10 @@ void processParameters(int argc, char* argv[]) {
     P = 3;
     num = 20;
     DETERMINISTIC = TRUE;
-
-    // test
-    // lambda = 2;
-    // mu = 0.35; 
-    // r = 4;
-    // B = 10;
-    // P = 3;
-    // num = 3; // default = 20;
-    // test .......
-
+    processCommandLine(argc, argv);
     Default_Inter_Arrival_Time = 1000.0 / lambda;
     Default_Service_Time = 1000.0 / mu;
     Default_Token_Arrival_Time = 1000.0 / r;
-
-    processCommandLine(argc, argv);
 
     if (DETERMINISTIC) {
         Default_Inter_Arrival_Time = min(1000.0 / lambda, MAX_RATE);
@@ -455,17 +528,17 @@ void processParameters(int argc, char* argv[]) {
 
 void showStat() {
     if (packetArrived == 0) {
-        fprintf(stdout, "\taverage packet inter-arrival time = N/A, no packet arrived\n");
+        fprintf(stdout, "\taverage packet inter-arrival time time = N/A, no packet arrived\n");
     } else {
-        fprintf(stdout, "\taverage packet inter-arrival time = %.6g\n", averageInterArrivalTime / 1000.0);
+        fprintf(stdout, "\taverage packet inter-arrival time time = %.6g\n", averageInterArrivalTime / 1000.0);
     }
     if (packetCompleted == 0) {
-        fprintf(stdout, "\taverage packet inter-arrival time = N/A, no packet was served\n");
+        fprintf(stdout, "\taverage packet service time = N/A, no packet was served\n");
     } else {
-        fprintf(stdout, "\taverage packet inter-arrival time = %.6g\n", averageServiceTime / 1000.0);
+        fprintf(stdout, "\taverage packet service time = %.6g\n", averageServiceTime / 1000.0);
     }
     fprintf(stdout, "\n");
-    
+    getRelativeTimeInMs(&totalEmulationTime);
     fprintf(stdout, "\taverage number of packets in Q1 = %.6g\n", totalQ1Time / totalEmulationTime);
     fprintf(stdout, "\taverage number of packets in Q2 = %.6g\n", totalQ2Time / totalEmulationTime);
     fprintf(stdout, "\taverage number of packets in S1 = %.6g\n", totalS1Time / totalEmulationTime);
@@ -485,14 +558,14 @@ void showStat() {
     if (tokenProduced == 0) {
         fprintf(stdout, "\ttoken drop probability = N/A, no tokens was produced\n");
     } else {
-        double tokenDroppedProb = tokenDropped / tokenProduced * 1.0;
+        double tokenDroppedProb = 1.0 * tokenDropped / tokenProduced;
         fprintf(stdout, "\ttoken drop probability = %.6g\n", tokenDroppedProb);
     }
 
     if (packetArrived == 0) {
         fprintf(stdout, "\tpacket drop probability = N/A, no packets arrived\n");
     } else {
-        double packetDroppedProb = packetDropped / packetArrived * 1.0;
+        double packetDroppedProb = 1.0 * packetDropped / packetArrived;
         fprintf(stdout, "\tpacket drop probability = %.6g\n", packetDroppedProb);
     }
     fprintf(stdout, "\n");
@@ -508,15 +581,22 @@ void init() {
     prevTokenTime = 0;
     packetRemaining = TRUE;
     tokenRemaining = TRUE;
+    EndSignal = FALSE;
     gettimeofday(&START_TIME, NULL);
+
+    sigemptyset(&set);
+    sigaddset(&set, SIGINT);
+    sigprocmask(SIG_BLOCK, &set, 0);
 
     My402ListInit(&Q1);
     My402ListInit(&Q2);
     fprintf(stdout, "%012.3fms: emulation begins\n", 0.0);
+    pthread_create(&cancellationThread, 0, cancellation, NULL);
     pthread_create(&packetThread, 0, packetArrival, NULL);
     pthread_create(&tokenThread, 0, tokenDeposit, NULL);
     pthread_create(&serverThread1, 0, serverOperation, (void*) 1);
     pthread_create(&serverThread2, 0, serverOperation, (void*) 2);
+    
 }
 
 void end() {
@@ -524,6 +604,9 @@ void end() {
     pthread_join(tokenThread, NULL);
     pthread_join(serverThread1, NULL);
     pthread_join(serverThread2, NULL);
+    pthread_setcancelstate(PTHREAD_CANCEL_ENABLE, 0);
+    pthread_cancel(cancellationThread);
+    pthread_join(cancellationThread, NULL);
 
     getRelativeTimeInMs(&endTime);
     totalEmulationTime = endTime;
